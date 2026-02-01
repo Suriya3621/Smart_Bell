@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, Variants } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import {
   FiLock,
@@ -17,7 +17,7 @@ export default function Verify() {
   const [isLoading, setIsLoading] = useState(false);
   const [attempts, setAttempts] = useState(0);
 
-  const handleButtonClick = (value) => {
+  const handleButtonClick = (value: string) => {
     if (value === "C") {
       setAccessCode("");
       setError("");
@@ -81,9 +81,15 @@ export default function Verify() {
     visible: { opacity: 1, y: 0 },
   };
 
-  const buttonVariants = {
+  const buttonVariants: Variants = {
     tap: { scale: 0.9 },
-    hover: { scale: 1.05, transition: { type: "spring", stiffness: 400 } },
+    hover: {
+      scale: 1.05,
+      transition: {
+        type: "spring" as const,
+        stiffness: 400,
+      },
+    },
   };
 
   return (
@@ -227,12 +233,11 @@ export default function Verify() {
               {buttons.map((btn) => (
                 <motion.button
                   key={btn}
-                  variants={itemVariants}
+                  variants={buttonVariants}
                   whileTap="tap"
                   whileHover="hover"
-                  variants={buttonVariants}
                   onClick={() => handleButtonClick(btn)}
-                  className={`h-14 rounded-xl text-lg font-semibold transition-all ${
+                  className={`h-14 rounded-xl text-lg font-semibold transition-all select-none ${
                     btn === "C"
                       ? "bg-red-500 hover:bg-red-600 text-white"
                       : btn === "⌫"

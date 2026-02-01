@@ -282,9 +282,9 @@ export default function Home() {
       console.log(`Received on ${topic}:`, msg);
 
       if (msg === "RINGING" || msg === "BELL_ON") {
-        bellControl.setIsRingingState(true);
+        bellControl.setIsRinging(true);
       } else if (msg === "STOPPED" || msg === "BELL_OFF") {
-        bellControl.setIsRingingState(false);
+        bellControl.setIsRinging(false);
       } else if (msg.startsWith("LIST:RESP:")) {
         const [, , index, h, m, c, d] = msg.split(":");
         setSchedules((prev) => {
