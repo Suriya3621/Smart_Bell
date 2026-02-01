@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { motion, AnimatePresence, Variants } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
+import type { Variants } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import {
   FiLock,
@@ -86,7 +87,7 @@ export default function Verify() {
     hover: {
       scale: 1.05,
       transition: {
-        type: "spring" as const,
+        type: "spring",
         stiffness: 400,
       },
     },

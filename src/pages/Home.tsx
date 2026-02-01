@@ -188,6 +188,7 @@ const useBellControl = (connected: boolean, publish: (msg: string) => void) => {
 
   return {
     isRinging,
+    setIsRinging,
     bellDown,
     bellUp,
     handlePressStart,
@@ -306,7 +307,11 @@ export default function Home() {
       }
     });
 
-    return () => client.end(true);
+    return () => {
+      if (clientRef.current) {
+        clientRef.current.end(true);
+      }
+    };
   }, []);
 
   /* ================= MQTT SEND ================= */
