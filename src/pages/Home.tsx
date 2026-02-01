@@ -79,12 +79,128 @@ const useTheme = () => {
   return { theme, toggleTheme };
 };
 
+/* ================= BELL CONTROL HOOK ================= */
+const useBellControl = (connected: boolean, publish: (msg: string) => void) => {
+  const [isRinging, setIsRinging] = useState(false);
+  const touchActiveRef = useRef(false);
+  const pressTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const safetyTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Clear all timers
+  const clearTimers = () => {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+    if (safetyTimerRef.current) {
+      clearTimeout(safetyTimerRef.current);
+      safetyTimerRef.current = null;
+    }
+  };
+
+  // Start ringing
+  const bellDown = () => {
+    if (!connected || isRinging) return;
+    
+    touchActiveRef.current = true;
+    publish("ON");
+    setIsRinging(true);
+    
+    // Clear existing timers
+    clearTimers();
+    
+    // Safety timer - auto stop after 30 seconds max
+    safetyTimerRef.current = setTimeout(() => {
+      if (touchActiveRef.current) {
+        bellUp();
+      }
+    }, 30000);
+  };
+
+  // Stop ringing
+  const bellUp = () => {
+    if (!connected || !isRinging) return;
+    
+    touchActiveRef.current = false;
+    publish("OFF");
+    setIsRinging(false);
+    clearTimers();
+  };
+
+  // Handle press start with debounce
+  const handlePressStart = () => {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+    }
+    
+    pressTimerRef.current = setTimeout(() => {
+      bellDown();
+    }, 50); // Small delay to prevent accidental clicks
+  };
+
+  // Handle press end with immediate response
+  const handlePressEnd = () => {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+    
+    if (touchActiveRef.current) {
+      bellUp();
+    }
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      clearTimers();
+      // Make sure bell is off when component unmounts
+      if (isRinging) {
+        publish("OFF");
+      }
+    };
+  }, []);
+
+  // Handle window events
+  useEffect(() => {
+    const handleBlur = () => {
+      if (isRinging) {
+        bellUp();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden && isRinging) {
+        bellUp();
+      }
+    };
+
+    window.addEventListener('blur', handleBlur);
+    window.addEventListener('beforeunload', handleBlur);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('beforeunload', handleBlur);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [isRinging]);
+
+  return {
+    isRinging,
+    bellDown,
+    bellUp,
+    handlePressStart,
+    handlePressEnd,
+    forceStop: bellUp,
+  };
+};
+
 /* ================= COMPONENT ================= */
 export default function Home() {
   const clientRef = useRef<mqtt.MqttClient | null>(null);
   const [connected, setConnected] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
-  const [isRinging, setIsRinging] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState("connecting");
   const [notification, setNotification] = useState<{
     message: string;
@@ -96,6 +212,7 @@ export default function Home() {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [showTeamInfo, setShowTeamInfo] = useState(false);
+  const [isTouchDevice, setIsTouchDevice] = useState(false);
 
   const { theme, toggleTheme } = useTheme();
 
@@ -109,6 +226,11 @@ export default function Home() {
   const [editMinute, setEditMinute] = useState(30);
   const [editCount, setEditCount] = useState(2);
   const [editDuration, setEditDuration] = useState(5);
+
+  // Detect touch device
+  useEffect(() => {
+    setIsTouchDevice('ontouchstart' in window || navigator.maxTouchPoints > 0);
+  }, []);
 
   /* ============ NOTIFICATION ============ */
   const showNotification = (
@@ -160,9 +282,9 @@ export default function Home() {
       console.log(`Received on ${topic}:`, msg);
 
       if (msg === "RINGING" || msg === "BELL_ON") {
-        setIsRinging(true);
+        bellControl.setIsRingingState(true);
       } else if (msg === "STOPPED" || msg === "BELL_OFF") {
-        setIsRinging(false);
+        bellControl.setIsRingingState(false);
       } else if (msg.startsWith("LIST:RESP:")) {
         const [, , index, h, m, c, d] = msg.split(":");
         setSchedules((prev) => {
@@ -196,6 +318,9 @@ export default function Home() {
       showNotification("Not connected to MQTT broker", "error");
     }
   };
+
+  /* ================= BELL CONTROL ================= */
+  const bellControl = useBellControl(connected, publish);
 
   /* ================= SCHEDULE ACTIONS ================= */
   const addSchedule = () => {
@@ -254,21 +379,6 @@ export default function Home() {
   const refreshSchedules = () => {
     publish("LIST");
     showNotification("Refreshing schedules...", "info");
-  };
-
-  /* ================= MANUAL BELL CONTROL ================= */
-  const pressTimer = useRef<any>(null);
-
-  const bellDown = () => {
-    // Send ON immediately on press
-    publish("ON");
-    setIsRinging(true);
-  };
-
-  const bellUp = () => {
-    // Send OFF immediately on release
-    publish("OFF");
-    setIsRinging(false);
   };
 
   /* ================= UI COMPONENTS ================= */
@@ -395,7 +505,7 @@ export default function Home() {
             className={`w-3 h-3 rounded-full animate-pulse ${connected ? "bg-green-500" : "bg-red-500"}`}
           />
           <FiBell
-            className={`w-5 h-5 ${isRinging ? "text-yellow-500 dark:text-yellow-400 animate-bounce" : "text-gray-400"}`}
+            className={`w-5 h-5 ${bellControl.isRinging ? "text-yellow-500 dark:text-yellow-400 animate-bounce" : "text-gray-400"}`}
           />
           <ThemeToggle />
           <button
@@ -716,7 +826,7 @@ export default function Home() {
           <div className="absolute inset-0 bg-gradient-to-r from-yellow-400 to-orange-500 rounded-full blur-xl opacity-30 dark:opacity-50" />
           <div className="relative w-24 h-24 bg-white dark:bg-gray-900 rounded-full flex items-center justify-center border-4 border-gray-200 dark:border-gray-800 shadow-xl">
             <FiBell
-              className={`w-12 h-12 ${isRinging ? "text-yellow-500 dark:text-yellow-400 animate-bounce" : "text-gray-400"}`}
+              className={`w-12 h-12 ${bellControl.isRinging ? "text-yellow-500 dark:text-yellow-400 animate-bounce" : "text-gray-400"}`}
             />
           </div>
         </div>
@@ -724,7 +834,9 @@ export default function Home() {
           Manual Bell Control
         </h3>
         <p className="text-gray-600 dark:text-gray-400">
-          Press and hold the button to ring the bell
+          {isTouchDevice 
+            ? "Touch and hold to ring the bell" 
+            : "Press and hold the button to ring the bell"}
         </p>
       </div>
 
@@ -732,8 +844,8 @@ export default function Home() {
         <motion.button
           whileTap={{ scale: 0.95 }}
           whileHover={{ scale: 1.05 }}
-          onClick={bellDown}
-          disabled={!connected || isRinging}
+          onClick={bellControl.bellDown}
+          disabled={!connected || bellControl.isRinging}
           className="bg-gradient-to-r from-green-500 to-emerald-600 disabled:from-gray-300 disabled:to-gray-400 dark:disabled:from-gray-700 dark:disabled:to-gray-800 text-white py-4 rounded-xl font-bold text-lg flex items-center justify-center space-x-3 transition-all hover:shadow-lg hover:shadow-green-500/25"
         >
           <FiPlayCircle className="w-6 h-6" />
@@ -743,8 +855,8 @@ export default function Home() {
         <motion.button
           whileTap={{ scale: 0.95 }}
           whileHover={{ scale: 1.05 }}
-          onClick={bellUp}
-          disabled={!connected || !isRinging}
+          onClick={bellControl.bellUp}
+          disabled={!connected || !bellControl.isRinging}
           className="bg-gradient-to-r from-red-500 to-pink-600 disabled:from-gray-300 disabled:to-gray-400 dark:disabled:from-gray-700 dark:disabled:to-gray-800 text-white py-4 rounded-xl font-bold text-lg flex items-center justify-center space-x-3 transition-all hover:shadow-lg hover:shadow-red-500/25"
         >
           <FiPauseCircle className="w-6 h-6" />
@@ -758,39 +870,92 @@ export default function Home() {
             Press & Hold Bell
           </h4>
           <p className="text-gray-600 dark:text-gray-400 text-sm">
-            Press to turn ON • Release to turn OFF • Bell rings while pressed
+            {isTouchDevice 
+              ? "Touch to turn ON • Release to turn OFF • Bell rings while touched"
+              : "Press to turn ON • Release to turn OFF • Bell rings while pressed"}
           </p>
         </div>
 
         <motion.button
-          onMouseDown={bellDown}
-          onMouseUp={bellUp}
-          onTouchStart={bellDown}
-          onTouchEnd={bellUp}
+          // Main press handlers - optimized for reliability
+          onMouseDown={bellControl.handlePressStart}
+          onMouseUp={bellControl.handlePressEnd}
+          onMouseLeave={bellControl.handlePressEnd}
+          onTouchStart={(e) => {
+            e.preventDefault();
+            bellControl.handlePressStart();
+          }}
+          onTouchEnd={(e) => {
+            e.preventDefault();
+            bellControl.handlePressEnd();
+          }}
+          onTouchCancel={bellControl.handlePressEnd}
+          onContextMenu={(e) => e.preventDefault()}
           whileTap={{ scale: 0.95 }}
           whileHover={{ scale: 1.02 }}
           disabled={!connected}
-          className={`w-full py-8 rounded-2xl font-bold text-xl transition-all relative overflow-hidden ${
-            isRinging
+          className={`w-full py-8 rounded-2xl font-bold text-xl transition-all relative overflow-hidden select-none touch-none ${
+            bellControl.isRinging
               ? "bg-gradient-to-r from-yellow-400 to-orange-500 shadow-lg shadow-orange-500/50"
               : "bg-gradient-to-r from-blue-500 to-purple-600 disabled:from-gray-300 disabled:to-gray-400 dark:disabled:from-gray-700 dark:disabled:to-gray-800"
           }`}
+          style={{ 
+            WebkitTapHighlightColor: 'transparent',
+            userSelect: 'none',
+            WebkitUserSelect: 'none'
+          }}
         >
           <div className="relative z-10 flex items-center justify-center space-x-3">
             <FiBell
-              className={`w-7 h-7 ${isRinging ? "animate-bounce" : ""}`}
+              className={`w-7 h-7 ${bellControl.isRinging ? "animate-bounce" : ""}`}
             />
-            <span>{isRinging ? "Ringing..." : "Press to Ring Bell"}</span>
+            <span>{bellControl.isRinging ? "Ringing..." : "Press to Ring Bell"}</span>
           </div>
+          
+          {/* Safety indicator */}
+          {bellControl.isRinging && (
+            <div className="absolute bottom-2 left-0 right-0 px-4">
+              <div className="h-1 bg-white/30 rounded-full overflow-hidden">
+                <motion.div 
+                  className="h-full bg-white"
+                  initial={{ width: "100%" }}
+                  animate={{ width: "0%" }}
+                  transition={{ duration: 30, ease: "linear" }}
+                />
+              </div>
+            </div>
+          )}
         </motion.button>
 
         <div className="mt-4 text-center">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            {isRinging
-              ? "Bell is ringing - release button to stop"
-              : "Press and hold the button to start ringing"}
+            {bellControl.isRinging
+              ? "Bell is ringing - release to stop"
+              : "Press and hold to start ringing"}
+          </p>
+          <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
+            {isTouchDevice 
+              ? "Touch and hold anywhere on button" 
+              : "Click and hold anywhere on button"}
           </p>
         </div>
+        
+        {/* Force stop button */}
+        {bellControl.isRinging && (
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mt-4 text-center"
+          >
+            <button
+              onClick={bellControl.forceStop}
+              className="inline-flex items-center justify-center px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              <FiPauseCircle className="w-4 h-4 mr-2" />
+              Force Stop Bell
+            </button>
+          </motion.div>
+        )}
       </div>
     </motion.div>
   );
@@ -845,12 +1010,12 @@ export default function Home() {
             </div>
             <div
               className={`px-3 py-1 rounded-full text-sm font-medium w-fit ${
-                isRinging
+                bellControl.isRinging
                   ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
                   : "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400"
               }`}
             >
-              {isRinging ? "Ringing" : "Idle"}
+              {bellControl.isRinging ? "Ringing" : "Idle"}
             </div>
           </div>
 
